@@ -1,8 +1,7 @@
-// Keep track of which names are used so that there are no duplicates
-var userNames = (function () {
-  var names = {};
+const userNames = (function () {
+  const names = {};
 
-  var claim = function (name) {
+  const claim = function (name) {
     if (!name || names[name]) {
       return false;
     } else {
@@ -11,77 +10,60 @@ var userNames = (function () {
     }
   };
 
-  // find the lowest unused "guest" name and claim it
-  var getGuestName = function () {
-    var name,
-      nextUserId = 1;
-
-    do {
-      name = 'Guest ' + nextUserId;
-      nextUserId += 1;
-    } while (!claim(name));
-
-    return name;
+  const get = function () {
+    return Object.keys(names);
   };
 
-  // serialize claimed names as an array
-  var get = function () {
-    var res = [];
-    for (user in names) {
-      res.push(user);
-    }
-
-    return res;
-  };
-
-  var free = function (name) {
+  const free = function (name) {
     if (names[name]) {
       delete names[name];
     }
   };
 
   return {
-    claim: claim,
-    free: free,
-    get: get,
-    getGuestName: getGuestName
+    claim,
+    free,
+    get
   };
-}());
+})();
 
-// export function for listening to the socket
 module.exports = function (socket) {
-  var name = userNames.getGuestName();
+  socket.on('init', function (data) {
+    const name = data.name;
 
-  // send the new user their name and a list of users
-  socket.emit('init', {
-    name: name,
-    users: userNames.get()
+    if (userNames.claim(name)) {
+      socket.emit('init', {
+        name: name,
+        users: userNames.get()
+      });
+
+      socket.broadcast.emit('user:join', {
+        name: name
+      });
+    } else {
+      socket.emit('init', {
+        error: 'Username already taken'
+      });
+    }
   });
 
-  // notify other clients that a new user has joined
-  socket.broadcast.emit('user:join', {
-    name: name
-  });
-
-  // broadcast a user's message to other users
   socket.on('send:message', function (data) {
+    data.timestamp = new Date().toISOString();
     socket.broadcast.emit('send:message', {
-      user: name,
-      text: data.text
+      user: data.user,
+      text: data.text,
+      timestamp: data.timestamp
     });
   });
 
-  // validate a user's name change, and broadcast it on success
   socket.on('change:name', function (data, fn) {
     if (userNames.claim(data.name)) {
-      var oldName = name;
+      const oldName = data.oldName;
       userNames.free(oldName);
 
-      name = data.name;
-      
       socket.broadcast.emit('change:name', {
         oldName: oldName,
-        newName: name
+        newName: data.name
       });
 
       fn(true);
@@ -90,11 +72,13 @@ module.exports = function (socket) {
     }
   });
 
-  // clean up when a user leaves, and broadcast it to other users
   socket.on('disconnect', function () {
-    socket.broadcast.emit('user:left', {
-      name: name
-    });
-    userNames.free(name);
+    const name = socket.username;
+    if (name) {
+      socket.broadcast.emit('user:left', {
+        name: name
+      });
+      userNames.free(name);
+    }
   });
 };
